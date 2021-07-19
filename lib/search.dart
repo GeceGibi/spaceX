@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/widgets.dart';
 import 'package:graphql_flutter/graphql_flutter.dart';
@@ -18,14 +20,12 @@ class SearchScreen extends StatelessWidget {
 
     return GraphQLProvider(
       client: client,
-      child: const CacheProvider(
-        child: _SearchScreen(),
-      ),
+      child: _SearchScreen(),
     );
   }
 }
 
-const getMissionByName = r'''
+const _getMissionByName = r'''
   query GetMissionsByName($name: String!, $limit: Int!, $offset: Int!) {
     launches(find: {mission_name: $name}, limit: $limit, offset: $offset) {
       mission_name
@@ -44,26 +44,40 @@ class __SearchScreenState extends State<_SearchScreen> {
   var limit = 10;
   var offset = 0;
 
-  QueryOptions get options {
-    return QueryOptions(
-      document: gql(getMissionByName),
-      variables: {
-        "name": query,
-        "limit": limit,
-        "offset": offset,
-      },
-    );
-  }
+  //? wait for user interaction
+  Timer? guard;
+
+  QueryOptions get options => QueryOptions(
+        document: gql(_getMissionByName),
+        variables: {
+          "name": query,
+          "limit": limit,
+          "offset": offset,
+        },
+      );
 
   void changeQuery(String name) {
     if (name.length < 3 && name.isNotEmpty) {
       return;
     }
 
-    setState(() {
-      query = name;
-      limit = 10;
-      offset = 0;
+    //? If typed new input clean prev timer
+    if (guard != null && guard!.isActive) {
+      guard!.cancel();
+    }
+
+    //? else user has finished typing and data can be fetched
+    guard = Timer.periodic(const Duration(milliseconds: 500), (timer) {
+      if (mounted) {
+        setState(() {
+          query = name;
+          limit = 10;
+          offset = 0;
+        });
+      }
+
+      //! timer: work once
+      timer.cancel();
     });
   }
 
@@ -71,7 +85,7 @@ class __SearchScreenState extends State<_SearchScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text("SpaceX Missins"),
+        title: Text("SpaceX Missions"),
       ),
       body: Column(
         mainAxisSize: MainAxisSize.max,
@@ -80,7 +94,7 @@ class __SearchScreenState extends State<_SearchScreen> {
             padding: const EdgeInsets.symmetric(horizontal: 12),
             child: TextField(
               decoration: const InputDecoration(
-                labelText: 'Filter mission',
+                labelText: 'Search in missions..',
               ),
               keyboardType: TextInputType.text,
               onChanged: changeQuery,
@@ -93,10 +107,20 @@ class __SearchScreenState extends State<_SearchScreen> {
               Future<QueryResult> Function(FetchMoreOptions)? fetchMore,
               Future<QueryResult?> Function()? refetch,
             }) {
+              //? An error occurred
               if (result.hasException) {
-                return Text(result.exception.toString());
+                return Expanded(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Text("Server returned an error."),
+                      Text(result.exception!.graphqlErrors[0].message)
+                    ],
+                  ),
+                );
               }
 
+              //? Loading
               if (result.data == null) {
                 return Expanded(
                   child: Center(
@@ -107,8 +131,19 @@ class __SearchScreenState extends State<_SearchScreen> {
 
               final missions = (result.data!['launches'] as List<dynamic>);
 
+              //? Not found and reults for query
+              if (missions.isEmpty) {
+                return Expanded(
+                  child: Center(
+                    child: Text("\"$query\" is not returned any results"),
+                  ),
+                );
+              }
+
               return Expanded(
                 child: ListView.builder(
+                  keyboardDismissBehavior:
+                      ScrollViewKeyboardDismissBehavior.onDrag,
                   padding: EdgeInsets.only(
                     top: 8,
                     left: 12,
@@ -116,7 +151,12 @@ class __SearchScreenState extends State<_SearchScreen> {
                   ),
                   itemCount: missions.length + 1,
                   itemBuilder: (_, index) {
+                    // Loader
                     if (index >= missions.length) {
+                      if (missions.length < limit) {
+                        return SizedBox.shrink();
+                      }
+
                       offset += limit;
 
                       fetchMore?.call(
@@ -184,14 +224,4 @@ class _Indicator extends StatelessWidget {
       ),
     );
   }
-}
-
-QueryBuilder withGenericHandling(QueryBuilder builder) {
-  return (result, {fetchMore, refetch}) {
-    if (result.hasException) {
-      return Text(result.exception.toString());
-    }
-
-    return builder(result, fetchMore: fetchMore, refetch: refetch);
-  };
 }
